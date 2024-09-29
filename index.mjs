@@ -1,5 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { GetCommand, UpdateCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand, DeleteCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 
 const client = new DynamoDBClient({ region: "us-east-1" });
 
@@ -9,14 +9,16 @@ export const handler = async (event) => {
     const headers = {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*', // Allow all origins
-        'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, PUT, DELETE, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization'
     };
 
     if (method === 'GET') {
         const tableName = event.queryStringParameters.tableName;
         const key = JSON.parse(event.queryStringParameters.key); // Parse the key from JSON string
-        key.userID = Number(key.userID); // Ensure userID is a number
+        if(key.userID) {
+            key.userID = Number(key.userID); // Ensure userID is a number
+        }
         if(key.listID) {
             key.listID = Number(key.listID); // Ensure listID is a number
         }
@@ -93,6 +95,40 @@ export const handler = async (event) => {
         }
     }
 
+    if (method === 'POST') {
+        const requestBody = JSON.parse(event.body);
+        const tableName = requestBody.tableName;
+        const item = requestBody.item;
+
+        // Ensure userID and listID are numbers if they exist
+        if (item.userID) {
+            item.userID = Number(item.userID);
+        }
+        if (item.listID) {
+            item.listID = Number(item.listID);
+        }
+
+        const params = {
+            TableName: tableName,
+            Item: item
+        };
+
+        try {
+            await client.send(new PutCommand(params));
+            return {
+                statusCode: 201,
+                headers: headers,
+                body: JSON.stringify({ message: 'Item created successfully' })
+            };
+        } catch (error) {
+            return {
+                statusCode: 500,
+                headers: headers,
+                body: JSON.stringify({ message: 'Error creating item', error: error.message })
+            };
+        }
+    }
+
     if (method === 'DELETE') {
         const tableName = event.queryStringParameters.tableName;
         const userID = Number(event.queryStringParameters.userID); // Ensure userID is a number
@@ -100,7 +136,7 @@ export const handler = async (event) => {
 
         const key = { userID: userID };
         if (listID) {
-            key.listID = listID;
+            key.listID = Number(listID);
         }
 
         const params = {
