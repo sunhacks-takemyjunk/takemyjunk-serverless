@@ -1,5 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { GetCommand, UpdateCommand, DeleteCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand, DeleteCommand, PutCommand, ScanCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 const client = new DynamoDBClient({ region: "us-east-1" });
 
@@ -13,42 +13,91 @@ export const handler = async (event) => {
         'Access-Control-Allow-Headers': 'Content-Type, Authorization'
     };
 
+    if (method === 'OPTIONS') {
+        return {
+            statusCode: 200,
+            headers: headers,
+            body: JSON.stringify({}),
+        };
+    }
+
     if (method === 'GET') {
         const tableName = event.queryStringParameters.tableName;
-        const keyParam = event.queryStringParameters.key;
+        const encodedKey = event.queryStringParameters.key;
         const target = event.queryStringParameters.desired;
 
-        if (keyParam) {
-            const key = JSON.parse(keyParam); // Parse the key from JSON string
-            if (key.userID) {
-                key.userID = Number(key.userID); // Ensure userID is a number
-            }
-            if (key.listID) {
-                key.listID = Number(key.listID); // Ensure listID is a number
-            }
+        if (encodedKey) {
+            // Decode the key
+            const decodedKey = decodeURIComponent(encodedKey);
 
-            const params = {
-                TableName: tableName,
-                Key: key, // Use the parsed key object
-                ProjectionExpression: target // Example: 'balance'
-            };
+            // Extract key-value pairs from the decoded key
+            const keyPairs = decodedKey.split(',').filter(pair => pair.includes(':')).map(pair => pair.split(':'));
+            const key = {};
+            keyPairs.forEach(([k, v]) => {
+                key[k] = isNaN(v) ? v : Number(v); // Convert to number if possible
+            });
 
-            try {
-                const data = await client.send(new GetCommand(params));
-                return {
-                    statusCode: 200,
-                    headers: headers,
-                    body: JSON.stringify({ message: 'Data retrieved successfully', data: data.Item })
+            if (key.email && key.password) {
+                // Query by GSI (email and password)
+                const email = key.email;
+                const password = key.password;
+
+                const params = {
+                    TableName: tableName,
+                    IndexName: 'email-password-index', // Use the GSI
+                    KeyConditionExpression: 'email = :email AND password = :password',
+                    ExpressionAttributeValues: {
+                        ':email': email,
+                        ':password': password
+                    },
+                    ProjectionExpression: target // Example: 'userID'
                 };
-            } catch (error) {
+
+                try {
+                    const data = await client.send(new QueryCommand(params));
+                    return {
+                        statusCode: 200,
+                        headers: headers,
+                        body: JSON.stringify({ message: 'Data retrieved successfully', data: data.Items })
+                    };
+                } catch (error) {
+                    return {
+                        statusCode: 500,
+                        headers: headers,
+                        body: JSON.stringify({ message: 'Error retrieving data', error: error.message })
+                    };
+                }
+            } else if (key.userID) {
+                // Query by primary key (userID)
+                const params = {
+                    TableName: tableName,
+                    Key: { userID: key.userID },
+                    ProjectionExpression: target // Example: 'balance'
+                };
+
+                try {
+                    const data = await client.send(new GetCommand(params));
+                    return {
+                        statusCode: 200,
+                        headers: headers,
+                        body: JSON.stringify({ message: 'Data retrieved successfully', data: data.Item })
+                    };
+                } catch (error) {
+                    return {
+                        statusCode: 500,
+                        headers: headers,
+                        body: JSON.stringify({ message: 'Error retrieving data', error: error.message, params: params
+                        })
+                    };
+                }
+            } else {
                 return {
-                    statusCode: 500,
+                    statusCode: 400,
                     headers: headers,
-                    body: JSON.stringify({ message: 'Error retrieving data', error: error.message })
+                    body: JSON.stringify({ message: 'Invalid key format. Provide either userID or both email and password.' })
                 };
             }
-        } 
-        else {
+        } else {
             const params = {
                 TableName: tableName,
                 ProjectionExpression: target // Example: 'listID, img_url, item_info, item_name, item_price'
@@ -74,12 +123,24 @@ export const handler = async (event) => {
     if (method === 'PUT') {
         const requestBody = JSON.parse(event.body);
         const tableName = requestBody.tableName;
-        const key = requestBody.key;
-        key.userID = Number(key.userID); // Ensure userID is a number
+        const keyParam = requestBody.key;
         const target = requestBody.target;
         const data = requestBody.data;
 
-        const targetAttributes = target.split(',').map(attr => attr.trim());
+        // Handle both single value and comma-separated list for key
+        const key = {};
+        if (keyParam.includes(',')) {
+            const keyPairs = keyParam.split(',').map(pair => pair.split(':'));
+            keyPairs.forEach(([k, v]) => {
+                key[k] = isNaN(v) ? v : Number(v); // Convert to number if possible
+            });
+        } else {
+            const [k, v] = keyParam.split(':');
+            key[k] = isNaN(v) ? v : Number(v); // Convert to number if possible
+        }
+
+        // Handle both single value and comma-separated list for target
+        const targetAttributes = target.includes(',') ? target.split(',').map(attr => attr.trim()) : [target];
 
         if (targetAttributes.length !== data.length) {
             return {
@@ -156,12 +217,18 @@ export const handler = async (event) => {
 
     if (method === 'DELETE') {
         const tableName = event.queryStringParameters.tableName;
-        const userID = Number(event.queryStringParameters.userID); // Ensure userID is a number
-        const listID = event.queryStringParameters.listID;
+        const keyParam = event.queryStringParameters.key;
 
-        const key = { userID: userID };
-        if (listID) {
-            key.listID = Number(listID);
+        // Handle both single value and comma-separated list for key
+        const key = {};
+        if (keyParam.includes(',')) {
+            const keyPairs = keyParam.split(',').map(pair => pair.split(':'));
+            keyPairs.forEach(([k, v]) => {
+                key[k] = isNaN(v) ? v : Number(v); // Convert to number if possible
+            });
+        } else {
+            const [k, v] = keyParam.split(':');
+            key[k] = isNaN(v) ? v : Number(v); // Convert to number if possible
         }
 
         const params = {
