@@ -1,5 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { GetCommand, UpdateCommand, DeleteCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand, DeleteCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 
 const client = new DynamoDBClient({ region: "us-east-1" });
 
@@ -15,34 +15,59 @@ export const handler = async (event) => {
 
     if (method === 'GET') {
         const tableName = event.queryStringParameters.tableName;
-        const key = JSON.parse(event.queryStringParameters.key); // Parse the key from JSON string
-        if(key.userID) {
-            key.userID = Number(key.userID); // Ensure userID is a number
-        }
-        if(key.listID) {
-            key.listID = Number(key.listID); // Ensure listID is a number
-        }
+        const keyParam = event.queryStringParameters.key;
         const target = event.queryStringParameters.desired;
 
-        const params = {
-            TableName: tableName,
-            Key: key, // Use the parsed key object
-            ProjectionExpression: target // Example: 'balance'
-        };
+        if (keyParam) {
+            const key = JSON.parse(keyParam); // Parse the key from JSON string
+            if (key.userID) {
+                key.userID = Number(key.userID); // Ensure userID is a number
+            }
+            if (key.listID) {
+                key.listID = Number(key.listID); // Ensure listID is a number
+            }
 
-        try {
-            const data = await client.send(new GetCommand(params));
-            return {
-                statusCode: 200,
-                headers: headers,
-                body: JSON.stringify({ message: 'Data retrieved successfully', data: data.Item })
+            const params = {
+                TableName: tableName,
+                Key: key, // Use the parsed key object
+                ProjectionExpression: target // Example: 'balance'
             };
-        } catch (error) {
-            return {
-                statusCode: 500,
-                headers: headers,
-                body: JSON.stringify({ message: 'Error retrieving data', error: error.message })
+
+            try {
+                const data = await client.send(new GetCommand(params));
+                return {
+                    statusCode: 200,
+                    headers: headers,
+                    body: JSON.stringify({ message: 'Data retrieved successfully', data: data.Item })
+                };
+            } catch (error) {
+                return {
+                    statusCode: 500,
+                    headers: headers,
+                    body: JSON.stringify({ message: 'Error retrieving data', error: error.message })
+                };
+            }
+        } 
+        else {
+            const params = {
+                TableName: tableName,
+                ProjectionExpression: target // Example: 'listID, img_url, item_info, item_name, item_price'
             };
+
+            try {
+                const data = await client.send(new ScanCommand(params));
+                return {
+                    statusCode: 200,
+                    headers: headers,
+                    body: JSON.stringify({ message: 'Data retrieved successfully', data: data.Items })
+                };
+            } catch (error) {
+                return {
+                    statusCode: 500,
+                    headers: headers,
+                    body: JSON.stringify({ message: 'Error retrieving data', error: error.message })
+                };
+            }
         }
     }
 
